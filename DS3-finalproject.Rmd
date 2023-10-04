@@ -1,0 +1,552 @@
+---
+title: "Sentiment Analysis: FRIENDS"
+author: "Maryam Khan"
+date: "4/30/2022"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Get the transcripts for all "Friends" episodes.
+# https://transcripts.foreverdreaming.org/viewforum.php?f=845
+
+
+## Load packages
+
+#install.packages("curl")
+#rm(list=ls())
+
+library(rvest)
+library(tidyverse)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(pbapply)
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(textdata)
+library(textclean)
+library(wordcloud)
+library(tm)
+library(topicmodels)
+library(reshape2)
+library(curl)
+
+```
+
+
+![](/Users/maryamkhan/Data_Science3/friends-showtile.png.2733ae58689b3e59e477a86d2da48a36.jpg)
+
+# Introduction
+
+This project is for the Data Science 3 class in which we learnt how to do text analysis using R and some packages like tidytext. I will be doing a text analysis on the Friends script. I started off with scraping data from the following website [Forever Dreaming](https://transcripts.foreverdreaming.org/viewforum.php?f=845), I scraped all the scripts for 10 seasons to see how different characters sentiments change throughout the show. 
+
+The main point if focus for this analysis will be Chandler Bing's character. In my opinion, he is the funniest character in Friends, and I believe he is the character that grows the most as the seasons progress. I will be analyzing how Chandler's character changes throughout from being a guy who uses humor and smoking as his coping mechanisms to someone who lands an amazing job, marries his best friend, Monica, and is there for her during hard times. He is also the person who helps Joey out with all his financial problems.
+
+The main hypothesis statement is that Chandlers character becomes more positive as the seasons progress.
+
+# Scraping the Data
+
+The data for all the 10 seasons was in 10 pages so first I generated the links for those 10 pages as each page had a sequence of 25 starting from 0 and going till 225. After the page links were ready I used the html nodes function to extract the episode name and links that lead to the individual transcripts on a single page by creating a function. Then by using lapply I applied the same function to all the 10 pages.
+The next step was to scrape the text of each individual transcript and the text was present under the id page content and p. From the string of text I separated the actor and the text and converted it into a data table and saved it in a csv. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# pages <- paste0("https://transcripts.foreverdreaming.org/viewforum.php?f=845&start=", seq(0, 225, 25))
+# 
+# process_one_link <- function(my_link){
+#   t <- read_html(my_link)
+#   episodes <- list()
+#   episodes[['name']] <- t %>% html_nodes(".topictitle") %>% html_text()
+#   episodes[['link']] <- t %>% html_nodes(".topictitle") %>% html_attr('href')
+#   return(episodes)
+# }
+# 
+# episode_links <- data.table(rbindlist(lapply(pages, process_one_link)))
+# 
+# episode_links <- episode_links[name != "Updates: 5/1/22 Editors Needed :)",]
+# 
+# # link <- episode_links$link[2]
+# get_transcript <- function(link) {
+#   # print(link)
+#   t <- read_html(paste0("https://transcripts.foreverdreaming.org", str_sub(link, start = 2) ))
+#   transcript <- t %>% html_nodes("#pagecontent p") %>% html_text()
+#   tinfo <- t %>% html_nodes('h2') %>% html_text()
+#   transcript <- str_subset(transcript, "^(?!\\[)")
+#   transcript <- str_subset(transcript, "^(?!\\()")
+#   transcript <- str_subset(transcript, "^(?!Scene)")
+#   transcript<- transcript[grepl(':', transcript, fixed = T)]
+#   textdf <- 
+#     rbindlist(
+#       lapply(transcript, function(x){
+#         t_piaces <- strsplit(x, ':')[[1]]
+#         data.table('actor' = t_piaces[1], 'text' = trimws(paste(t_piaces[2:length(t_piaces)], collapse = " " )) )
+#       })
+#     )
+#   textdf$season <- substring(tinfo, 1, 2)
+#   textdf$episode <- substring(tinfo, 4, 5)
+#   textdf$title <- substring(tinfo, 9,nchar(tinfo))
+#   return(textdf)
+# }
+# 
+# t_list <- pblapply(episode_links$link, get_transcript)
+# full_df <- rbindlist(t_list, fill = T)
+# 
+# 
+# saveRDS(full_df, "friends_data.rds")
+# 
+# write.csv(full_df, "friends_data.csv", row.names = F)
+# 
+
+# Data can be downloaded from here: https://github.com/maryamkhan1120/DS2/blob/main/Final-Project/friends_data.rds
+# Since the file was too big I was unable to call it directly from gtihub
+data <- readRDS("friends_data.rds")
+```
+
+# Data Cleaning 
+
+After scraping the data from the website, the next step was to clean the data and get it into a form that would be easy to analyze. For this I first converted the episode and seasons into numeric and filtered episodes that had less than 100 lines as that seemed to be incorrect. There were a total of 2 episodes that had less than 100 lines. The names of the main characters of the show were written in different ways and therefore, I converted them all into the same format. After making sure the lines of each of the characters were under the same name, I filtered the names of the characters and only kept the six main characters:
+
+- Rachel
+- Monica
+- Phoebe
+- Ross
+- Chandler 
+- Joey
+
+**Tokens**
+After the data had been cleaned, I tokenized the text by using the tidytext package. Tokenization basically breaks down the text into individual words so that sentiment analysis can be carried out.
+
+Then I proceeded to clean the words by removing stop words, digits, contractions, and other words like names that do not describe sentiment and are written in slang. Removing contractions and other words was a difficult task because the apostrophe wasn't recognized by the remove contractions function hence I removed them manually from the text.
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Cleaning the data
+
+data$season <- as.numeric(data$season)
+data$episode <- as.numeric(data$episode)
+
+data %>% group_by(season) %>% summarise(episode_number = max(episode))
+
+data <- data %>%
+  group_by(season, episode) %>%
+  mutate(lines = n()) %>%
+  ungroup()
+
+## 2 episodes seem to be incorrect as they have less than 20 lines
+
+data <- data %>%
+  filter(lines >= 100)
+
+#length(unique(data$title))
+
+#length(unique(data$actor))
+
+#data %>% group_by(season) %>% summarise(episode_number = max(episode))
+
+count <- data %>% dplyr::group_by(actor) %>% dplyr::count(sort=TRUE)
+#count
+
+# Changing names
+data$actor[data$actor=="MNCA"] <- "Monica"
+data$actor[data$actor=="RACH"] <- "Rachel"
+data$actor[data$actor=="PHOE"] <- "Phoebe"
+data$actor[data$actor=="CHAN"] <- "Chandler"
+data$actor[data$actor=="PHOEBE"] <- "Phoebe"
+data$actor[data$actor=="ROSS"] <- "Ross"
+data$actor[data$actor=="CHANDLER"] <- "Chandler"
+data$actor[data$actor=="MONICA"] <- "Monica"
+data$actor[data$actor=="JOEY"] <- "Joey"
+data$actor[data$actor=="RACHEL"] <- "Rachel"
+
+count1 <- data %>% dplyr::group_by(actor) %>% dplyr::count(sort=TRUE)
+#count1
+```
+
+# Exprolatory Data Analysis
+
+I also conducted some exploratory data analysis to see the number of lines each character had. Rachel had the greatest number of lines in all the 10 seasons and Phoebe has the least as seen in the graph below.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+data %>% group_by(actor) %>% 
+  summarize(lines = n()) %>% 
+  arrange(desc(lines)) %>% 
+  top_n(6) %>%
+  ggplot(aes(reorder(actor, lines), lines)) +
+  geom_col(fill = 'cyan4', alpha = 0.8) +
+  geom_text(aes(label = lines), size = 4, position = position_stack(vjust = 0.5)) +
+  labs(title = 'Number of lines by main charachters',
+       x = NULL, y = NULL) +
+  coord_flip() +
+  theme_light()
+```
+
+
+The number of lines Chandler spoke throughout the seasons increased till season 6 and then they decreased. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+data %>% 
+  filter(actor %in%  "Chandler")  %>%
+  group_by(season) %>% 
+  summarize(lines = n()) %>% 
+  arrange(desc(season)) %>% 
+  ggplot(aes(season, lines)) +
+  geom_col(fill = 'cyan4', alpha = 0.8) +
+  geom_text(aes(label = lines), size = 4, position = position_stack(vjust = 0.5)) +
+  labs(title = 'Number of lines by Chandler in each season',
+       x = NULL, y = NULL)  +
+  theme_light()
+```
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Keeping only main characters
+data <- data %>% filter(actor %in% c("Monica", "Rachel", "Phoebe", "Chandler", "Ross", "Joey")) 
+
+data$text <- toString(data$text)
+data$linenum <- 1:nrow(data)
+
+# friends_bigrams <- data %>%
+#   unnest_tokens(bigram, text, token = "ngrams", n = 2)
+# friends_bigrams
+# 
+# bigrams_separated <- friends_bigrams %>%
+#   separate(bigram, c("word1", "word2"), sep = " ")
+# bigrams_separated
+# fwrite(bigrams_separated, "bigrams_separated.csv")
+# bigrams_separated <- read.csv("bigrams_separated.csv")
+# 
+# 
+# bigrams_filtered <- bigrams_separated %>%
+#   filter(!word1 %in% stop_words$word) %>%
+#   filter(!word2 %in% stop_words$word)
+# bigrams_filtered
+# 
+# bigram_counts <- bigrams_filtered %>% # new bigram counts
+#   dplyr::count(actor,word1, word2, sort = TRUE)
+# bigram_counts
+
+
+
+```
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# tokens <- data %>% unnest_tokens(word, text, token = "ngrams", n = 1)
+# 
+# fwrite(tokens, "tokens.csv")
+# tokens <- read.csv("tokens.csv")
+# names(tokens)[names(tokens) == 'bigram'] <- 'word'
+# 
+# tokens_filtered <- tokens %>%
+#   filter(!word %in% stop_words$word)
+# tokens_filtered
+# 
+# 
+# tokens_counts <- tokens_tidy %>%
+#   dplyr::count(actor,word, sort = TRUE)
+# tokens_counts
+# 
+# Removing undesirable words and stop words
+
+# undesirable_words <- c("hey", "yeah", "uh", "ross","gonna", "i’m","joey", "chandler","rachel","monica", "phoebe", "it’s", "y’know", "guys","that’s", "you’re","ooh", "umm", "huh", "um", "don’t", "god","y'know", "rach", "guy","can’t","ohh","i’ll", "didn’t","she’s","pheebs","we’re","gotta", "wanna","ben","i’ve", "there’s","joe", "what’s","doesn’t", "lot","he’s", "let’s")
+# 
+# tokens_tidy <- tokens_filtered %>%
+#   filter(!word %in% undesirable_words) %>%
+#   filter(!nchar(word) < 3) %>%
+#   anti_join(stop_words)
+# 
+# 
+# # Removing digits
+# tokens_tidy$word <- gsub("\\d", "", tokens_tidy$word)
+# 
+# fwrite(tokens_tidy, "tokens_tidy.csv")
+#tokens_tidy <- read.csv("tokens_tidy.csv")
+
+
+
+
+tokens_tidy <- read.csv( curl("https://raw.githubusercontent.com/maryamkhan1120/DS2/main/Final-Project/tokens_tidy.csv") )
+
+```
+
+
+# Sentiment Analysis
+
+I used the package textdata to conduct sentiment analysis using afinn, ncr and bing. 
+
+**AFINN** function scores each word according to the sentiment it expresses.
+
+**NCR** function describes the sentiment of the word in terms of emotions.
+
+**BING** function categorizes word into positive or negative sentiments 
+
+The visualizations below show the top 25 words used in friends and spoken by Chandler. The trend for both is very similar.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+afinn <- get_sentiments("afinn")
+tokensafinn <- tokens_tidy %>% inner_join(afinn)
+
+
+
+tokens_viz <- tokens_tidy %>%  inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+
+tokens_chand <- tokens_tidy %>%  filter(actor %in%  "Chandler")  %>% inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+# tokens_viz
+
+all_pop <- tokens_viz %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words from FRIENDS") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+
+chand_pop <- tokens_chand %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words spoken by Chandler") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+all_pop
+chand_pop
+```
+
+The visualizations below show the top 10 negative and positive words used in Friends. 
+
+The most popular positive word spoken by Chandler was funny and the most popular positive word for the entire series was wow. This reiterates the fact that Chandler's character does crack a lot of jokes. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+all_neg <- tokens_viz %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  filter(value<= -4) %>% 
+  head(10) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 10 negative words uttered by characters") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+
+
+all_pos <- tokens_viz %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  filter(value>=4) %>% 
+  head(10) %>%
+  mutate(word2 = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE, fill="#00BFC4") +
+  xlab("Top 10 positive words uttered by characters") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+
+chand_neg <- tokens_chand %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  filter(value<= -4) %>% 
+  head(10) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 10 negative words by Chandler") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+
+
+chand_pos <- tokens_chand %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  filter(value>=4) %>% 
+  head(10) %>%
+  mutate(word2 = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE, fill="#00BFC4") +
+  xlab("Top 10 positive words by Chandler") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+
+all_neg
+chand_neg
+all_pos
+chand_pos
+```
+
+
+I also conducted a bing lexicon analysis on all the characters to compare Chandlers sentiment relative to the others. As it can be seen in the graph below Chandler had the highest negative sentiment throughout the series followed by Rachel and Ross.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+bing <- get_sentiments("bing")
+
+tokensbing <- tokens_tidy %>% inner_join(bing)
+
+tokensbing %>% 
+  ggplot(aes(sentiment, fill = actor))+
+  geom_bar(show.legend = FALSE)+
+  facet_wrap(actor~.)+
+  theme_light()+
+  theme(
+    strip.text = element_text(),
+    plot.title = element_text(hjust = 0.5, size = 20)
+  )+
+  labs(fill = NULL, x = NULL, y = "Sentiment Frequency", title = "Sentiments of each characters by using bing lexicon")
+```
+
+## Chandler Bing's character over the years
+
+Then I conducted the afinn lexicon sentiment analysis to analyze how Chandler's sentiment changed over time as the seasons progressed. Sentiment in the first 3 seasons is low as Chandler starts of as a character who is very sarcastic and negative in the beginning due to his childhood trauma. We see in the beginning seasons that Chandler has commitment issues and he is emotionally unavailable through his relationship with Janice. However, in the end of season 4 when Chandler starts dating Monica, we see that his character does become more positive in seasons 5 and 6.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+tidy_afinn <- tokens_tidy  %>% inner_join(afinn)
+tidy_afinn %>% 
+  filter(actor %in%  "Chandler")  %>% 
+  group_by(season, actor) %>% 
+  summarise(total = sum(value), .groups = 'drop') %>% 
+  ungroup() %>% 
+  mutate(Neg = if_else(total < 0, TRUE, FALSE)) %>% 
+  ggplot()+
+  geom_path(aes(season, total, color = actor), size = 1.2)+
+  theme_light()+
+  theme(legend.position = "bottom")+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+
+  labs(x = "Season", color = NULL, y = "Total Sentiment Score")
+```
+
+
+To further analyse how the character traits of Chandler evolved over time I used the NRC lexicon sentiment analysis. It is evident from the graphs below that trust, positivity and joy increase till season 6. A major contributing factor to this is his relationship with Monica. He really matures and is the first one in the friends group to settle down with her with a stable job. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ 
+nrc <- get_sentiments("nrc")
+
+tokensnrc <- tokens_tidy %>% inner_join(nrc)  
+  
+tokensnrc %>% 
+  filter(actor %in%  "Chandler")  %>% 
+  group_by(season) %>% 
+  ggplot(aes(sentiment, fill = sentiment))+
+  geom_bar(show.legend = TRUE)+
+  facet_wrap(~season)+
+  theme_light()+
+  theme(
+    strip.text = element_text(),
+    plot.title = element_text(hjust = 0.5, size = 20)
+  )+
+  labs(fill = NULL, x = NULL, y = "Sentiment Frequency", title = "Sentiments of Chandler")
+  
+
+```
+
+### Wordcloud
+
+To see the main words used by Chandler throughout the years. The first wordcloud includes seasons 1 - 3, the second one includes seasons 5 - 7 and the third one includes seasons 8 - 9.
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+
+wordcloud1 <- tokens_tidy %>%
+filter(actor %in%  "Chandler")%>%
+filter(season %in%  c(1,2,3))%>%
+anti_join(stop_words) %>%
+count(word) %>%
+with(wordcloud(word, n, max.words = 100, main="Season 1"))
+
+wordcloud5 <- tokens_tidy %>%
+filter(actor %in%  "Chandler")%>%
+filter(season %in%  c(5,6,7))%>%
+anti_join(stop_words) %>%
+count(word) %>%
+with(wordcloud(word, n, max.words = 100, main="Season 5"))
+   
+
+wordcloud10 <- tokens_tidy %>%
+filter(actor %in%  "Chandler")%>%
+filter(season %in%  c(8,9,10))%>%
+anti_join(stop_words) %>%
+count(word) %>%
+with(wordcloud(word, n, max.words = 100, main="Season 10"))
+
+
+
+
+```
+
+
+## Topic Modelling 
+
+Topic Modelling is a method that uses a documents and helps in determining the main topic of that document. I did this in order to see how the topics discussed by Chandler's character changed over the years.  
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+dtm <- tokens_tidy %>% 
+  filter(actor %in%  "Chandler")%>%
+  select(season, word) %>% 
+  group_by(season, word) %>% 
+  count() %>% 
+  cast_dtm(season, word, n)
+
+#dtm
+
+lda <- LDA(dtm, k = 10, control = list(seed = 1234))
+#lda
+
+topics <- tidy(lda, matrix = "beta")
+
+top_terms <- topics %>%group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+
+
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  scale_x_reordered()+
+  labs(title = "Word-Topic Probabilities")+
+  theme(plot.title = element_text(hjust = 0.5, size = 20, face = "bold"))+
+  theme_light()
+```
+
+# Conclusion
+
+I mainly used the tidytext package for the purpose of this analysis and I believe that it is a very powerful tool. However, a lot of emotions are expressed by sounds like woah, ohh, damnit and these words are recognized by the lexicon. Specifically in Chandler's case where he uses a lot of sarcasm to express himself was considered positive by the lexicons when in reality they are used in a negative context.
+
+We saw that Chandler's character did in fact become positive over the years and there was a lot of character development. If we compare the Chandler in season 1 to the Chandler in season 10, we can say that there has been immense growth as he got over his biggest fears, matured into a loving husband and father but without losing his quirky personality traits.  
+
+
+![](/Users/maryamkhan/Data_Science3/70eff6dcf80a14e2313e933b03a4a8ff.gif)
